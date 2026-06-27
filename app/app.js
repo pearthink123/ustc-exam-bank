@@ -14,7 +14,7 @@ const state = {
   school: "",
   year: "",
   section: "",
-  typeFilter: "choice",
+  typeFilter: "choice_gradable",
   module: "",
   branch: "",
   topic: "",
@@ -97,7 +97,13 @@ function getPool() {
     .filter((q) => (!state.school || q.school_id === state.school))
     .filter((q) => (!state.year || q.year === state.year))
     .filter((q) => (!state.section || q.section === state.section))
-    .filter((q) => (!state.typeFilter || q.type === state.typeFilter))
+    .filter((q) => {
+      if (!state.typeFilter) return true;
+      if (state.typeFilter === "choice_gradable") {
+        return q.type === "choice" && !!q.answer;
+      }
+      return q.type === state.typeFilter;
+    })
     .filter((q) => (!state.module || (q.module || q.topic_category) === state.module))
     .filter((q) => (!state.branch || q.branch === state.branch))
     .filter((q) => (!state.topic || q.topic === state.topic));
@@ -369,7 +375,7 @@ function selectOption(label) {
     panel.className = "answer-panel";
     panel.innerHTML = `
       <p>你已选择 <strong>${label}</strong>。</p>
-      <p>本题暂未匹配到标准答案。请点击「显示解析」对照原页图片，或切换到「按页刷」查看完整解析。</p>
+      <p>本题暂无标准答案（原卷未附答案或未识别到）。可点「显示解析」看题目，或切到「全部选择题」继续练。</p>
     `;
   }
 }
