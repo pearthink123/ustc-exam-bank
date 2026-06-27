@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "name": "finance-431-tiku",
+  "buildCommand": null,
+  "outputDirectory": "app",
+  "rewrites": [
+    { "source": "/", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+      ]
+    }
+  ]
+}

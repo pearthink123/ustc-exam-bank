@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#1f4d63" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="431刷题" />
+  <title>金融431 · 各院校历年真题</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon-192.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon-192.svg" />
+  <link rel="stylesheet" href="style.css" />
+  <script>
+    window.MathJax = {
+      tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
+      svg: { fontCache: 'global' }
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <p class="eyebrow">Finance 431 · Multi-School</p>
+        <h1>各院校真题刷题库</h1>
+      </div>
+      <div class="stats" id="stats"></div>
+    </header>
+
+    <button type="button" class="filter-toggle" id="filterToggle" aria-expanded="false">
+      筛选与设置 <span class="chevron">▼</span>
+    </button>
+
+    <section class="controls collapsed" id="controls">
+      <div class="control-group">
+        <label>院校</label>
+        <select id="schoolFilter"><option value="">全部院校</option></select>
+      </div>
+      <div class="control-group">
+        <label>模式</label>
+        <div class="btn-row" id="modeButtons">
+          <button class="btn active" data-mode="question">按题刷</button>
+          <button class="btn" data-mode="page">按页刷</button>
+          <button class="btn" data-mode="wrong">错题本</button>
+        </div>
+      </div>
+      <div class="control-group">
+        <label>年份</label>
+        <select id="yearFilter"><option value="">全部年份</option></select>
+      </div>
+      <div class="control-group">
+        <label>题目类型</label>
+        <select id="typeFilter">
+          <option value="choice" selected>选择题（推荐）</option>
+          <option value="">全部题型</option>
+          <option value="short_answer">简答题</option>
+          <option value="definition">名词解释</option>
+          <option value="calculation">计算题</option>
+          <option value="essay">论述题</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label>试卷板块</label>
+        <select id="sectionFilter"><option value="">全部板块</option></select>
+      </div>
+      <div class="control-group">
+        <label>模块</label>
+        <select id="moduleFilter"><option value="">全部模块</option></select>
+      </div>
+      <div class="control-group">
+        <label>知识分支</label>
+        <select id="branchFilter"><option value="">全部分支</option></select>
+      </div>
+      <div class="control-group">
+        <label>具体知识点</label>
+        <select id="topicFilter"><option value="">全部知识点</option></select>
+      </div>
+      <div class="control-group">
+        <label>刷题顺序</label>
+        <div class="btn-row">
+          <button class="btn active" data-order="sequential" id="orderSeq">按年份</button>
+          <button class="btn" data-order="topic" id="orderTopic">按知识点</button>
+          <button class="btn" data-order="random" id="orderRandom">随机</button>
+        </div>
+      </div>
+      <div class="control-group nav-group desktop-nav">
+        <label>翻题</label>
+        <div class="nav-row">
+          <button class="btn" id="prevBtn" disabled>上一题</button>
+          <span class="nav-position" id="navPosition">0 / 0</span>
+          <button class="btn primary" id="nextBtn">下一题</button>
+        </div>
+      </div>
+    </section>
+
+    <main class="card" id="card">
+      <div class="card-meta" id="cardMeta"></div>
+      <div class="card-body" id="cardBody">
+        <p class="loading">正在加载题库…</p>
+      </div>
+      <div class="card-actions">
+        <button class="btn success" id="masteredBtn">会了</button>
+        <button class="btn danger" id="wrongBtn">不会</button>
+        <button class="btn" id="revealBtn">解析</button>
+      </div>
+      <div class="answer-panel hidden" id="answerPanel"></div>
+    </main>
+
+    <section class="progress-panel">
+      <h2>学习进度</h2>
+      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      <p id="progressText"></p>
+    </section>
+  </div>
+
+  <nav class="mobile-bar" aria-label="翻题导航">
+    <button type="button" class="mbtn" id="prevBtnMobile" disabled>◀ 上一题</button>
+    <span class="mbtn-position" id="navPositionMobile">0/0</span>
+    <button type="button" class="mbtn primary" id="nextBtnMobile">下一题 ▶</button>
+  </nav>
+
+  <script src="config.js"></script>
+  <script src="app.js?v=11"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./sw.js").catch(() => {});
+    }
+  </script>
+</body>
+</html>
