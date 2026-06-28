@@ -1,4 +1,5 @@
 const STORAGE_KEY = "ustc-exam-progress-v1";
+const SESSION_KEY = "ustc-exam-session-v1";
 
 function assetUrl(path) {
   if (!path) return "";
@@ -23,27 +24,300 @@ const state = {
   current: null,
   selectedAnswer: null,
   revealed: false,
-  sessionCache: {},
   progress: loadProgress(),
 };
 
+function storageGet(key) {
+  try {
+    const value = localStorage.getItem(key);
+    if (value !== null) return value;
+  } catch {
+    /* ignore */
+  }
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function storageSet(key, value) {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch {
+    /* ignore */
+  }
+  try {
+    sessionStorage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function loadProgress() {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    return JSON.parse(storageGet(STORAGE_KEY) || "{}");
   } catch {
     return {};
   }
 }
 
 function saveProgress() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.progress));
+  storageSet(STORAGE_KEY, JSON.stringify(state.progress));
+}
+
+function loadSession() {
+  try {
+    return JSON.parse(storageGet(SESSION_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function getResumeSnapshot() {
+  return {
+    mode: state.mode,
+    order: state.order,
+    school: state.school,
+    year: state.year,
+    section: state.section,
+    typeFilter: state.typeFilter,
+    module: state.module,
+    branch: state.branch,
+    topic: state.topic,
+    currentId: state.current?.id ?? state.queue[state.index]?.id ?? null,
+    index: state.index,
+    savedAt: Date.now(),
+  };
+}
+
+function saveSession() {
+  storageSet(SESSION_KEY, JSON.stringify(getResumeSnapshot()));
+  saveResumePointer();
+}
+
+function saveResumePointer() {
+  const snapshot = getResumeSnapshot();
+  if (!snapshot.currentId) return;
+  state.progress.__meta__ = snapshot;
+  storageSet(STORAGE_KEY, JSON.stringify(state.progress));
+}
+
+function applySession(session) {
+  const meta = state.progress.__meta__ || {};
+  const data = { ...meta, ...(session || {}) };
+  if (!Object.keys(data).length) return;
+
+  if (data.mode) state.mode = data.mode;
+  if (data.order) state.order = data.order;
+  if (data.school !== undefined) state.school = data.school;
+  if (data.year !== undefined) state.year = data.year;
+  if (data.section !== undefined) state.section = data.section;
+  if (data.typeFilter !== undefined) state.typeFilter = data.typeFilter;
+  if (data.module !== undefined) state.module = data.module;
+  if (data.branch !== undefined) state.branch = data.branch;
+  if (data.topic !== undefined) state.topic = data.topic;
+
+  if (data.sessionCache) {
+    Object.entries(data.sessionCache).forEach(([id, entry]) => {
+      const rec = ensureItem(id);
+      if (entry.selectedAnswer) rec.selectedAnswer = entry.selectedAnswer;
+      if (entry.revealed) rec.revealed = true;
+      if (entry.selectedAnswer || entry.revealed) rec.lastAt = rec.lastAt || Date.now();
+    });
+    saveProgress();
+  }
+
+  state.restoreId = data.currentId || null;
+  if (typeof data.index === "number" && data.index >= 0) {
+    state.restoreIndex = data.index;
+  }
 }
 
 function ensureItem(id) {
   if (!state.progress[id]) {
-    state.progress[id] = { mastered: false, wrong: false, seen: 0 };
+    state.progress[id] = {
+      mastered: false,
+      wrong: false,
+      seen: 0,
+      selectedAnswer: null,
+      revealed: false,
+      lastAt: null,
+    };
   }
   return state.progress[id];
+}
+
+function hasAttempt(rec) {
+  return Boolean(
+    rec && (rec.selectedAnswer || rec.revealed || rec.mastered || rec.wrong)
+  );
+}
+
+function findResumeIndex(queue) {
+  const firstNew = queue.findIndex((item) => !hasAttempt(state.progress[item.id]));
+  if (firstNew >= 0) return firstNew;
+  for (let i = queue.length - 1; i >= 0; i -= 1) {
+    if (hasAttempt(state.progress[queue[i].id])) return i;
+  }
+  return 0;
+}
+
+function findLastWorkedId(queue) {
+  let bestId = null;
+  let bestAt = -1;
+  queue.forEach((item) => {
+    const rec = state.progress[item.id];
+    if (rec?.lastAt > bestAt) {
+      bestAt = rec.lastAt;
+      bestId = item.id;
+    }
+  });
+  return bestId;
+}
+
+function restoreFiltersForQuestion(id) {
+  if (!state.bank || !id || id === "__meta__") return false;
+
+  if (id.startsWith("page-")) {
+    const pageNum = Number(id.replace("page-", ""));
+    const page = (state.bank.pages || []).find((p) => p.page === pageNum);
+    if (!page) return false;
+    state.mode = "page";
+    state.school = page.school_id || "";
+    state.year = page.year || "";
+    state.section = "";
+    state.typeFilter = "";
+    state.module = "";
+    state.branch = "";
+    state.topic = "";
+    return true;
+  }
+
+  const q = state.bank.questions.find((item) => item.id === id);
+  if (!q) return false;
+
+  state.mode = "question";
+  state.school = q.school_id || "";
+  state.year = q.year || "";
+  state.section = q.section || "";
+  if (q.type === "choice" && q.answer) {
+    state.typeFilter = "choice_gradable";
+  } else if (q.type === "choice") {
+    state.typeFilter = "choice";
+  } else {
+    state.typeFilter = "";
+  }
+  state.module = "";
+  state.branch = "";
+  state.topic = "";
+  return true;
+}
+
+function getResumeCandidates(queue = state.queue) {
+  const session = loadSession();
+  return [
+    state.restoreId,
+    session.currentId,
+    state.progress.__meta__?.currentId,
+    findLastWorkedId(queue),
+  ].filter((id, index, list) => id && list.indexOf(id) === index);
+}
+
+function resolveResumePosition(queue, { resetPosition = false } = {}) {
+  if (resetPosition || !queue.length) {
+    return { index: findResumeIndex(queue), filtersChanged: false };
+  }
+
+  for (const id of getResumeCandidates(queue)) {
+    let idx = queue.findIndex((item) => item.id === id);
+    if (idx >= 0) return { index: idx, filtersChanged: false };
+
+    if (restoreFiltersForQuestion(id)) {
+      const widenedQueue = sortPool(getPool());
+      idx = widenedQueue.findIndex((item) => item.id === id);
+      if (idx >= 0) {
+        state.queue = widenedQueue;
+        return { index: idx, filtersChanged: true };
+      }
+    }
+  }
+
+  if (
+    typeof state.restoreIndex === "number"
+    && state.restoreIndex >= 0
+    && state.restoreIndex < queue.length
+  ) {
+    return { index: state.restoreIndex, filtersChanged: false };
+  }
+
+  return { index: findResumeIndex(queue), filtersChanged: false };
+}
+
+function persistAnswerState(id = state.current?.id) {
+  if (!id) return;
+  const rec = ensureItem(id);
+  rec.selectedAnswer = state.selectedAnswer;
+  rec.revealed = state.revealed;
+  rec.lastAt = Date.now();
+  saveProgress();
+  renderHistoryPanel();
+}
+
+function formatWhen(ts) {
+  if (!ts) return "";
+  const diff = Date.now() - ts;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "刚刚";
+  if (mins < 60) return `${mins} 分钟前`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} 天前`;
+  return new Date(ts).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
+}
+
+function attemptStatus(rec, item) {
+  if (rec.mastered) return { label: "会了", className: "ok" };
+  if (rec.wrong) {
+    if (item?.answer && rec.selectedAnswer) {
+      return rec.selectedAnswer === item.answer
+        ? { label: "会了", className: "ok" }
+        : { label: "错题", className: "bad" };
+    }
+    return { label: "不会", className: "bad" };
+  }
+  if (rec.selectedAnswer && item?.answer) {
+    return rec.selectedAnswer === item.answer
+      ? { label: "答对", className: "ok" }
+      : { label: "答错", className: "bad" };
+  }
+  if (rec.selectedAnswer) return { label: `选了 ${rec.selectedAnswer}`, className: "seen" };
+  if (rec.revealed) return { label: "看过解析", className: "seen" };
+  return { label: "已浏览", className: "seen" };
+}
+
+function renderPreviousAttempt(rec, item) {
+  if (!hasAttempt(rec)) return "";
+  const parts = [];
+  if (rec.selectedAnswer) {
+    const verdict = item.answer
+      ? rec.selectedAnswer === item.answer
+        ? "正确"
+        : "错误"
+      : "已选";
+    parts.push(`上次作答 <strong>${rec.selectedAnswer}</strong>（${verdict}）`);
+  } else if (rec.mastered) {
+    parts.push("上次标记为<strong>会了</strong>");
+  } else if (rec.wrong) {
+    parts.push("上次标记为<strong>不会</strong>");
+  } else if (rec.revealed) {
+    parts.push("上次<strong>看过解析</strong>");
+  }
+  if (rec.lastAt) parts.push(formatWhen(rec.lastAt));
+  return `<div class="prev-attempt">${parts.join(" · ")}</div>`;
 }
 
 function updateStats() {
@@ -51,6 +325,7 @@ function updateStats() {
   const mastered = allIds.filter((id) => state.progress[id]?.mastered).length;
   const wrong = allIds.filter((id) => state.progress[id]?.wrong).length;
   const seen = allIds.filter((id) => state.progress[id]?.seen).length;
+  const answered = allIds.filter((id) => hasAttempt(state.progress[id])).length;
   const total = allIds.length;
   const pct = total ? Math.round((mastered / total) * 100) : 0;
 
@@ -62,10 +337,12 @@ function updateStats() {
     <div>选择题自动判分 <strong>${choiceAnswered}/${choiceTotal}</strong></div>
     <div>已掌握 <strong>${mastered}</strong></div>
     <div>错题 <strong>${wrong}</strong></div>
+    <div>已作答 <strong>${answered}</strong></div>
     <div>已浏览 <strong>${seen}</strong></div>
   `;
   document.getElementById("progressFill").style.width = `${pct}%`;
   document.getElementById("progressText").textContent = `掌握进度 ${pct}%（${mastered}/${total}）`;
+  renderHistoryPanel();
 }
 
 function getPool() {
@@ -143,22 +420,134 @@ function sortPool(pool) {
   return [...pool].sort(byYearNumber);
 }
 
-function rebuildQueue() {
+function rebuildQueue({ resetPosition = false } = {}) {
+  if (resetPosition) {
+    state.restoreId = null;
+    state.restoreIndex = null;
+  }
+
   const pool = getPool();
   state.queue = sortPool(pool);
-  state.index = 0;
-  state.sessionCache = {};
+  const resume = resolveResumePosition(state.queue, { resetPosition });
+  state.index = resume.index;
+  state.restoreId = null;
+  state.restoreIndex = null;
+  if (resume.filtersChanged) {
+    populateFilters();
+    syncFilterUI();
+  }
+
+  saveSession();
   updateStats();
   updateNavControls();
   showCurrent();
 }
 
-function cacheCurrentSession() {
-  if (!state.current) return;
-  state.sessionCache[state.current.id] = {
-    selectedAnswer: state.selectedAnswer,
-    revealed: state.revealed,
-  };
+function touchCurrentItem() {
+  persistAnswerState();
+  saveSession();
+}
+
+function getMapCellStatus(item, index) {
+  if (index === state.index) return "current";
+  const rec = state.progress[item.id];
+  if (!rec || !hasAttempt(rec)) return "todo";
+  if (rec.wrong) return "wrong";
+  return "done";
+}
+
+function getMapCounts() {
+  let done = 0;
+  let wrong = 0;
+  let todo = 0;
+  state.queue.forEach((item, index) => {
+    const status = getMapCellStatus(item, index);
+    if (status === "done") done += 1;
+    else if (status === "wrong") wrong += 1;
+    else if (status === "todo") todo += 1;
+  });
+  return { done, wrong, todo, total: state.queue.length };
+}
+
+const MAP_STATUS_LABELS = {
+  todo: "未做",
+  done: "已做",
+  wrong: "错题",
+  current: "当前",
+};
+
+function renderQuestionPicker() {
+  const select = document.getElementById("questionPicker");
+  const pickerTotal = document.getElementById("pickerTotal");
+  if (!select) return;
+
+  const total = state.queue.length;
+  if (pickerTotal) pickerTotal.textContent = `/ ${total}`;
+
+  if (!total) {
+    select.innerHTML = "<option value=\"\">无题目</option>";
+    select.disabled = true;
+    return;
+  }
+
+  select.disabled = false;
+  select.innerHTML = state.queue
+    .map((item, index) => {
+      const status = getMapCellStatus(item, index);
+      const selected = index === state.index ? "selected" : "";
+      return `<option value="${index}" ${selected}>${index + 1} · ${MAP_STATUS_LABELS[status]}</option>`;
+    })
+    .join("");
+}
+
+function renderQuestionMap() {
+  const grid = document.getElementById("mapGrid");
+  const jumpInput = document.getElementById("jumpInput");
+  const queueBadge = document.getElementById("queueBadge");
+  if (!grid) return;
+
+  const total = state.queue.length;
+  const current = total ? state.index + 1 : 0;
+  const counts = getMapCounts();
+
+  if (queueBadge) {
+    queueBadge.textContent = total
+      ? `第 ${current} 题 / 共 ${total} 题（已做 ${counts.done} · 未做 ${counts.todo}）`
+      : "当前筛选下暂无题目";
+  }
+  if (jumpInput) {
+    jumpInput.max = String(total || 1);
+    jumpInput.placeholder = total ? `1-${total}` : "题号";
+  }
+
+  renderQuestionPicker();
+
+  if (!total) {
+    grid.innerHTML = `<p class="map-empty">当前筛选下没有题目</p>`;
+    return;
+  }
+
+  grid.innerHTML = state.queue
+    .map((item, index) => {
+      const num = index + 1;
+      const status = getMapCellStatus(item, index);
+      const title = [
+        `第 ${num} 题`,
+        item.school_name,
+        item.year ? `${item.year}年` : "",
+        item.kind === "page" ? `第 ${item.page} 页` : `原卷第 ${item.number} 题`,
+        status === "todo" ? "未做" : status === "wrong" ? "错题" : status === "done" ? "已做" : "当前",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      return `<button type="button" class="map-cell ${status}" data-index="${index}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">${num}</button>`;
+    })
+    .join("");
+
+  const active = grid.querySelector(".map-cell.current");
+  if (active) {
+    active.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
 }
 
 function updateNavControls() {
@@ -166,43 +555,67 @@ function updateNavControls() {
   const current = total ? state.index + 1 : 0;
   const label = `${current} / ${total}`;
   const labelShort = `${current}/${total}`;
-  document.getElementById("navPosition").textContent = label;
+  const navPosition = document.getElementById("navPosition");
+  if (navPosition) navPosition.textContent = label;
   const mobilePos = document.getElementById("navPositionMobile");
   if (mobilePos) mobilePos.textContent = labelShort;
   const prevDisabled = state.index <= 0;
   const nextDisabled = !total;
-  ["prevBtn", "prevBtnMobile"].forEach((id) => {
+  ["prevBtn", "prevBtnMobile", "prevBtnInline"].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.disabled = prevDisabled;
   });
-  ["nextBtn", "nextBtnMobile"].forEach((id) => {
+  ["nextBtn", "nextBtnMobile", "nextBtnInline"].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.disabled = nextDisabled;
   });
+  renderQuestionMap();
+}
+
+function goToIndex(index) {
+  if (index < 0 || index >= state.queue.length) return;
+  touchCurrentItem();
+  state.index = index;
+  saveSession();
+  updateNavControls();
+  showCurrent();
+}
+
+function goToNumber(num) {
+  const parsed = Number.parseInt(String(num), 10);
+  if (!Number.isFinite(parsed)) return;
+  goToIndex(parsed - 1);
+}
+
+function scrollToQuestionNav() {
+  document.getElementById("questionPicker")?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 function goPrev() {
   if (state.index <= 0) return;
-  cacheCurrentSession();
+  touchCurrentItem();
   state.index -= 1;
+  saveSession();
   updateNavControls();
   showCurrent();
 }
 
 function goNext() {
   if (!state.queue.length) return;
-  cacheCurrentSession();
+  touchCurrentItem();
   if (state.index < state.queue.length - 1) {
     state.index += 1;
+    saveSession();
     updateNavControls();
     showCurrent();
     return;
   }
   if (state.order === "random") {
-    rebuildQueue();
+    rebuildQueue({ resetPosition: true });
     return;
   }
   state.index = 0;
+  saveSession();
   updateNavControls();
   showCurrent();
 }
@@ -238,11 +651,11 @@ function showCurrent() {
 
   state.current = state.queue[state.index];
   const item = state.current;
-  const cached = state.sessionCache[item.id];
-  state.selectedAnswer = cached?.selectedAnswer ?? null;
-  state.revealed = cached?.revealed ?? false;
+  const rec = ensureItem(item.id);
+  state.selectedAnswer = rec.selectedAnswer ?? null;
+  state.revealed = Boolean(rec.revealed);
 
-  ensureItem(item.id).seen += 1;
+  rec.seen += 1;
   saveProgress();
   updateStats();
   updateNavControls();
@@ -260,9 +673,10 @@ function showCurrent() {
     item.type && item.type !== "unknown" ? typeLabel(item.type) : null,
   ].filter(Boolean);
 
-  document.getElementById("cardMeta").innerHTML = tags
-    .map((t) => (t.startsWith("<span") ? t : `<span class="tag">${escapeHtml(t)}</span>`))
-    .join("");
+  document.getElementById("cardMeta").innerHTML = [
+    tags.map((t) => (t.startsWith("<span") ? t : `<span class="tag">${escapeHtml(t)}</span>`)).join(""),
+    renderPreviousAttempt(rec, item),
+  ].join("");
 
   if (item.kind === "page") {
     document.getElementById("cardBody").innerHTML = `
@@ -324,6 +738,8 @@ function showCurrent() {
       revealAnswer();
     }
   }
+
+  saveSession();
 }
 
 function selectOption(label) {
@@ -367,21 +783,41 @@ function selectOption(label) {
       panel.className = "answer-panel wrong-panel";
       panel.innerHTML = `<strong>回答错误。</strong> 你选了 ${label}，正确答案：<strong>${item.answer}</strong>`;
     }
+    rec.selectedAnswer = label;
+    rec.revealed = true;
+    rec.lastAt = Date.now();
     saveProgress();
     updateStats();
+    renderQuestionMap();
     panel.innerHTML += renderExplanation(item);
     typesetPanel(panel);
   } else {
+    const rec = ensureItem(item.id);
+    rec.selectedAnswer = label;
+    rec.revealed = true;
+    rec.lastAt = Date.now();
+    saveProgress();
+    updateStats();
+    renderQuestionMap();
     panel.className = "answer-panel";
     panel.innerHTML = `
       <p>你已选择 <strong>${label}</strong>。</p>
       <p>本题暂无标准答案（原卷未附答案或未识别到）。可点「显示解析」看题目，或切到「全部选择题」继续练。</p>
     `;
   }
+  saveSession();
 }
 
 function revealAnswer() {
   if (!state.current) return;
+  state.revealed = true;
+  const rec = ensureItem(state.current.id);
+  rec.revealed = true;
+  rec.lastAt = Date.now();
+  saveProgress();
+  updateStats();
+  renderQuestionMap();
+  saveSession();
   const panel = document.getElementById("answerPanel");
   panel.classList.remove("hidden");
 
@@ -432,6 +868,43 @@ function typesetPanel(panel) {
   }
 }
 
+function formatPlainExplanation(text) {
+  return escapeHtml(text)
+    .split(/\n{2,}/)
+    .map((part) => `<p>${part.replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
+function uniqueImages(paths) {
+  const seen = new Set();
+  return (paths || []).filter((path) => {
+    if (!path || seen.has(path)) return false;
+    seen.add(path);
+    return true;
+  });
+}
+
+function renderPageImages(images, title) {
+  if (!images.length) return "";
+  const tags = images
+    .map(
+      (image, index) => `
+        <figure class="page-figure">
+          <img src="${assetUrl(image)}" alt="${title} ${index + 1}" loading="lazy" />
+          <figcaption>${title} ${images.length > 1 ? index + 1 : ""}</figcaption>
+        </figure>
+      `
+    )
+    .join("");
+
+  return `
+    <section class="page-gallery">
+      <h4>${title}</h4>
+      <div class="answer-page-images">${tags}</div>
+    </section>
+  `;
+}
+
 function renderExplanation(item) {
   const sections = item.explanation_sections || {};
   const labels = {
@@ -444,40 +917,45 @@ function renderExplanation(item) {
   };
 
   const blocks = Object.entries(labels)
-    .filter(([key]) => sections[key])
+    .filter(([key]) => sections[key] && String(sections[key]).trim())
     .map(
       ([key, label]) => `
         <section class="explain-block">
           <h4>${label}</h4>
-          <div class="explain-text">${escapeHtml(sections[key])}</div>
+          <div class="explain-text">${formatPlainExplanation(String(sections[key]))}</div>
         </section>
       `
     )
     .join("");
 
   const fallback = !blocks && item.explanation
-    ? `<div class="explanation">${escapeHtml(item.explanation)}</div>`
+    ? `<section class="explain-block"><h4>详细解析</h4><div class="explain-text">${formatPlainExplanation(item.explanation)}</div></section>`
     : "";
 
-  const answerImages = (item.answer_pages || [])
-    .map(
-      (image, index) => `
-        <img src="${assetUrl(image)}" alt="解析原页 ${index + 1}" loading="lazy" />
-      `
-    )
-    .join("");
+  const answerImages = uniqueImages(item.answer_pages || []);
+  const questionImage = item.image && !answerImages.includes(item.image) ? [item.image] : [];
+  const hasText = Boolean(blocks || fallback);
+  const imageBlock = [
+    renderPageImages(answerImages, "官方解析原页"),
+    !answerImages.length ? renderPageImages(questionImage, "题目原页") : "",
+  ].join("");
 
-  const imageBlock = answerImages
-    ? `
-      <details class="answer-pages" open>
-        <summary>解析原页（完整版，含公式与图表）</summary>
-        <div class="answer-page-images">${answerImages}</div>
-      </details>
-    `
-    : "";
+  const meta = [item.school_name, item.year ? `${item.year}年` : "", item.number ? `第${item.number}题` : ""]
+    .filter(Boolean)
+    .join(" · ");
+
+  const hint = !hasText && imageBlock
+    ? `<p class="explain-hint">文字解析未识别完整，请直接对照下方原页阅读（含公式、图表与完整推导）。</p>`
+    : !hasText
+      ? `<p class="explain-hint">本题暂无文字解析，建议切换到「按页刷」查看完整原卷。</p>`
+      : imageBlock
+        ? `<p class="explain-hint">下方附有解析原页，可对照公式与图表。</p>`
+        : "";
 
   return `
     <div class="explanation-wrap">
+      ${meta ? `<p class="explain-meta">${escapeHtml(meta)}</p>` : ""}
+      ${hint}
       ${blocks || fallback}
       ${imageBlock}
     </div>
@@ -628,6 +1106,155 @@ function populateKnowledgeFilters() {
   document.getElementById("topicFilter").value = state.topic;
 }
 
+function getHistoryItems(limit = 80) {
+  if (!state.bank) return [];
+
+  const questionMap = new Map(state.bank.questions.map((q) => [q.id, q]));
+  const pageMap = new Map(
+    (state.bank.pages || []).map((p) => [
+      `page-${p.page}`,
+      {
+        id: `page-${p.page}`,
+        kind: "page",
+        school_name: p.school_name,
+        year: p.year,
+        number: p.page,
+        stem: p.preview || `第 ${p.page} 页`,
+      },
+    ])
+  );
+
+  return Object.entries(state.progress)
+    .filter(([id]) => id !== "__meta__")
+    .filter(([, rec]) => hasAttempt(rec))
+    .map(([id, rec]) => {
+      const item = questionMap.get(id) || pageMap.get(id);
+      if (!item) return null;
+      const status = attemptStatus(rec, item);
+      return {
+        id,
+        item,
+        rec,
+        status,
+        sortAt: rec.lastAt || 0,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.sortAt - a.sortAt)
+    .slice(0, limit);
+}
+
+function renderHistoryPanel() {
+  const listEl = document.getElementById("historyList");
+  const countEl = document.getElementById("historyCount");
+  const hintEl = document.getElementById("historyHint");
+  if (!listEl) return;
+
+  const items = getHistoryItems();
+  if (countEl) countEl.textContent = `${items.length} 条`;
+  if (hintEl) {
+    hintEl.textContent = items.length
+      ? "点击记录可回看你的作答与解析"
+      : "还没有做题记录，做完题后会自动出现在这里";
+  }
+
+  if (!items.length) {
+    listEl.innerHTML = `<p class="history-empty">暂无记录</p>`;
+    return;
+  }
+
+  listEl.innerHTML = items
+    .map(({ id, item, rec, status }) => {
+      const title = [
+        item.school_name,
+        item.year ? `${item.year}年` : "",
+        item.kind === "page" ? `第 ${item.number} 页` : `第 ${item.number} 题`,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      const detail = rec.selectedAnswer
+        ? `你的选择：${rec.selectedAnswer}${item.answer ? ` · 正确答案：${item.answer}` : ""}`
+        : rec.mastered
+          ? "标记为会了"
+          : rec.wrong
+            ? "标记为不会"
+            : "看过解析";
+      const stem = (item.stem || "").replace(/\s+/g, " ").slice(0, 72);
+      const active = state.current?.id === id ? " active" : "";
+      return `
+        <button type="button" class="history-item${active}" data-history-id="${id}">
+          <div class="history-item-top">
+            <span class="history-title">${escapeHtml(title)}</span>
+            <span class="history-badge ${status.className}">${escapeHtml(status.label)}</span>
+          </div>
+          ${stem ? `<p class="history-stem">${escapeHtml(stem)}${item.stem && item.stem.length > 72 ? "…" : ""}</p>` : ""}
+          <p class="history-detail">${escapeHtml(detail)}${rec.lastAt ? ` · ${formatWhen(rec.lastAt)}` : ""}</p>
+        </button>
+      `;
+    })
+    .join("");
+}
+
+function jumpToQuestion(id) {
+  if (!state.bank || !id) return;
+
+  if (id.startsWith("page-")) {
+    state.mode = "page";
+  } else {
+    state.mode = "question";
+  }
+
+  document.querySelectorAll("#modeButtons .btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.mode === state.mode);
+  });
+
+  let pool = getPool();
+  let queue = sortPool(pool);
+  let idx = queue.findIndex((item) => item.id === id);
+
+  if (idx < 0 && !id.startsWith("page-")) {
+    const q = state.bank.questions.find((item) => item.id === id);
+    if (q) {
+      state.school = q.school_id || "";
+      state.year = q.year || "";
+      state.section = "";
+      state.typeFilter = "";
+      state.module = "";
+      state.branch = "";
+      state.topic = "";
+      populateFilters();
+      syncFilterUI();
+      pool = getPool();
+      queue = sortPool(pool);
+      idx = queue.findIndex((item) => item.id === id);
+    }
+  }
+
+  state.queue = queue;
+  state.index = idx >= 0 ? idx : findResumeIndex(queue);
+  saveSession();
+  updateStats();
+  updateNavControls();
+  showCurrent();
+  document.getElementById("card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function syncFilterUI() {
+  document.querySelectorAll("#modeButtons .btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.mode === state.mode);
+  });
+  document.querySelectorAll("[data-order]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.order === state.order);
+  });
+  document.getElementById("schoolFilter").value = state.school;
+  document.getElementById("yearFilter").value = state.year;
+  document.getElementById("sectionFilter").value = state.section;
+  document.getElementById("typeFilter").value = state.typeFilter;
+  document.getElementById("moduleFilter").value = state.module;
+  document.getElementById("branchFilter").value = state.branch;
+  document.getElementById("topicFilter").value = state.topic;
+}
+
 function populateFilters() {
   const years = state.bank.meta.years || [];
   const sections = [...new Set([
@@ -658,7 +1285,7 @@ function bindEvents() {
     document.querySelectorAll("#modeButtons .btn").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
     state.mode = btn.dataset.mode;
-    rebuildQueue();
+    rebuildQueue({ resetPosition: true });
   });
 
   function setOrder(order) {
@@ -666,7 +1293,7 @@ function bindEvents() {
     document.querySelectorAll("[data-order]").forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.order === order);
     });
-    rebuildQueue();
+    rebuildQueue({ resetPosition: true });
   }
 
   document.querySelectorAll("[data-order]").forEach((btn) => {
@@ -675,22 +1302,22 @@ function bindEvents() {
 
   document.getElementById("schoolFilter").addEventListener("change", (e) => {
     state.school = e.target.value;
-    rebuildQueue();
+    rebuildQueue({ resetPosition: true });
   });
 
   document.getElementById("yearFilter").addEventListener("change", (e) => {
     state.year = e.target.value;
-    rebuildQueue();
+    rebuildQueue({ resetPosition: true });
   });
 
   document.getElementById("sectionFilter").addEventListener("change", (e) => {
     state.section = e.target.value;
-    rebuildQueue();
+    rebuildQueue({ resetPosition: true });
   });
 
   document.getElementById("typeFilter").addEventListener("change", (e) => {
     state.typeFilter = e.target.value;
-    rebuildQueue();
+    rebuildQueue({ resetPosition: true });
   });
 
   document.getElementById("moduleFilter").addEventListener("change", (e) => {
@@ -698,25 +1325,30 @@ function bindEvents() {
     state.branch = "";
     state.topic = "";
     populateKnowledgeFilters();
-    rebuildQueue();
+    rebuildQueue({ resetPosition: true });
   });
 
   document.getElementById("branchFilter").addEventListener("change", (e) => {
     state.branch = e.target.value;
     state.topic = "";
     populateKnowledgeFilters();
-    rebuildQueue();
+    rebuildQueue({ resetPosition: true });
   });
 
   document.getElementById("topicFilter").addEventListener("change", (e) => {
     state.topic = e.target.value;
-    rebuildQueue();
+    rebuildQueue({ resetPosition: true });
   });
 
   document.getElementById("prevBtn").addEventListener("click", goPrev);
   document.getElementById("nextBtn").addEventListener("click", goNext);
   document.getElementById("prevBtnMobile")?.addEventListener("click", goPrev);
   document.getElementById("nextBtnMobile")?.addEventListener("click", goNext);
+  document.getElementById("prevBtnInline")?.addEventListener("click", goPrev);
+  document.getElementById("nextBtnInline")?.addEventListener("click", goNext);
+  document.getElementById("questionPicker")?.addEventListener("change", (e) => {
+    goToIndex(Number(e.target.value));
+  });
 
   document.getElementById("filterToggle")?.addEventListener("click", () => {
     const panel = document.getElementById("controls");
@@ -731,7 +1363,10 @@ function bindEvents() {
     const rec = ensureItem(state.current.id);
     rec.mastered = true;
     rec.wrong = false;
+    rec.lastAt = Date.now();
     saveProgress();
+    updateStats();
+    renderQuestionMap();
     goNext();
   });
 
@@ -740,8 +1375,34 @@ function bindEvents() {
     const rec = ensureItem(state.current.id);
     rec.wrong = true;
     rec.mastered = false;
+    rec.lastAt = Date.now();
     saveProgress();
+    updateStats();
+    renderQuestionMap();
     goNext();
+  });
+
+  document.getElementById("historyList")?.addEventListener("click", (e) => {
+    const row = e.target.closest("[data-history-id]");
+    if (!row) return;
+    jumpToQuestion(row.dataset.historyId);
+  });
+
+  document.getElementById("mapGrid")?.addEventListener("click", (e) => {
+    const cell = e.target.closest("[data-index]");
+    if (!cell) return;
+    goToIndex(Number(cell.dataset.index));
+  });
+
+  document.getElementById("mapJumpForm")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const input = document.getElementById("jumpInput");
+    goToNumber(input?.value);
+    if (input) input.value = "";
+  });
+
+  ["navPosition", "navPositionMobile"].forEach((id) => {
+    document.getElementById(id)?.addEventListener("click", scrollToQuestionNav);
   });
 
   document.getElementById("revealBtn").addEventListener("click", revealAnswer);
@@ -757,15 +1418,23 @@ function bindEvents() {
       goNext();
     }
   });
+
+  const flushResumeState = () => saveSession();
+  window.addEventListener("pagehide", flushResumeState);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushResumeState();
+  });
 }
 
 async function init() {
+  applySession(loadSession());
   bindEvents();
   try {
     const res = await fetch(assetUrl("questions.json"));
     if (!res.ok) throw new Error("questions.json 未生成");
     state.bank = await res.json();
     populateFilters();
+    syncFilterUI();
     rebuildQueue();
   } catch (err) {
     document.getElementById("cardBody").innerHTML = `

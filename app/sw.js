@@ -1,4 +1,4 @@
-const CACHE = "ustc-431-v2";
+const CACHE = "ustc-431-v6";
 const SHELL = [
   "/app/index.html",
   "/app/style.css",
@@ -26,6 +26,11 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
+
+  if (url.pathname.endsWith("/app.js") || url.pathname.endsWith("/index.html")) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
 
   const isShell = SHELL.some((path) => url.pathname === path || url.pathname.endsWith(path));
   const isData = url.pathname.endsWith("/data/questions.json");

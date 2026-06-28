@@ -91,13 +91,31 @@
         <label>翻题</label>
         <div class="nav-row">
           <button class="btn" id="prevBtn" disabled>上一题</button>
-          <span class="nav-position" id="navPosition">0 / 0</span>
+          <button type="button" class="nav-position" id="navPosition" title="打开题号选择">0 / 0</button>
           <button class="btn primary" id="nextBtn">下一题</button>
         </div>
       </div>
     </section>
 
     <main class="card" id="card">
+      <div class="question-nav-bar">
+        <button type="button" class="btn" id="prevBtnInline" disabled>上一题</button>
+        <div class="question-picker-wrap">
+          <label for="questionPicker">题号</label>
+          <select id="questionPicker" aria-label="选择题号"></select>
+          <span class="picker-total" id="pickerTotal">/ 0</span>
+        </div>
+        <button type="button" class="btn primary" id="nextBtnInline">下一题</button>
+      </div>
+      <p class="picker-hint">白=未做 · 绿=已做 · 红=错题 · 点下面数字也可跳转</p>
+      <div class="map-grid map-grid-inline" id="mapGrid"></div>
+      <form class="map-jump map-jump-inline" id="mapJumpForm">
+        <label for="jumpInput">跳到第</label>
+        <input type="number" id="jumpInput" min="1" step="1" inputmode="numeric" placeholder="题号" />
+        <span>题</span>
+        <button type="submit" class="btn primary">跳转</button>
+      </form>
+      <div class="queue-badge" id="queueBadge">第 0 题 / 共 0 题</div>
       <div class="card-meta" id="cardMeta"></div>
       <div class="card-body" id="cardBody">
         <p class="loading">正在加载题库…</p>
@@ -115,19 +133,30 @@
       <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
       <p id="progressText"></p>
     </section>
+
+    <section class="history-panel" id="historyPanel">
+      <div class="history-head">
+        <h2>做题记录</h2>
+        <span class="history-count" id="historyCount">0 条</span>
+      </div>
+      <p class="history-hint" id="historyHint">做完题后会自动保存在本地，下次打开可接着做</p>
+      <div class="history-list" id="historyList"></div>
+    </section>
   </div>
 
   <nav class="mobile-bar" aria-label="翻题导航">
     <button type="button" class="mbtn" id="prevBtnMobile" disabled>◀ 上一题</button>
-    <span class="mbtn-position" id="navPositionMobile">0/0</span>
+    <button type="button" class="mbtn-position" id="navPositionMobile" title="打开题号选择">0/0</button>
     <button type="button" class="mbtn primary" id="nextBtnMobile">下一题 ▶</button>
   </nav>
 
   <script src="config.js"></script>
-  <script src="app.js?v=11"></script>
+  <script src="app.js?v=16"></script>
   <script>
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("./sw.js").catch(() => {});
+      navigator.serviceWorker.getRegistrations().then((regs) => {
+        regs.forEach((reg) => reg.unregister());
+      });
     }
   </script>
 </body>
